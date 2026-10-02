@@ -1,0 +1,5 @@
+instrument_id,cusip,isin,instrument_name,asset_class,currency,country,sector,benchmark_id,maturity_date,coupon_rate,source_file,source_row
+INS-0001,CUS000001,US0000000011,Equity Instrument 1,Equity,USD,US,Technology,BM-SP500,,,security_master.csv,2
+INS-0002,CUS000002,US0000000021,Equity Instrument 2,Equity,USD,US,Technology,,,,security_master.csv,3
+INS-0003,CUSDUP0001,US0000000031,Bond Instrument 3,Bond,USD,US,,BM-SP500,2030-01-01,0.03,security_master.csv,4
+INS-0004,CUSDUP0001,US0000000041,Bond Instrument 4,Bond,USD,US,,,2031-01-01,0.03,security_master.csv,5

@@ -1,0 +1,4 @@
+fund_id,instrument_id,position_date,quantity,market_value,local_currency,source_file,source_row
+F01,INS-0001,2026-08-28,100,10000,USD,positions.csv,2
+F01,INS-9999,2026-08-28,50,500,USD,positions.csv,3
+F01,INS-0003,2026-08-28,-10,-500,USD,positions.csv,4

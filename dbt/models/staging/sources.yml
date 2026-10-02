@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: security_master
+      - name: pricing
+      - name: positions
+      - name: funds
+      - name: fx_rates
+      - name: ref_benchmarks
+      - name: ref_currency

@@ -1,0 +1,18 @@
+# build outputs
+service/target/
+*.class
+*.jar
+
+# generated data corpora (regenerate with generator/generate.py; see README)
+data/
+generator/__pycache__/
+*.pyc
+
+# dbt
+dbt/target/
+dbt/dbt_packages/
+dbt/logs/
+
+# IDE
+.idea/
+.vscode/

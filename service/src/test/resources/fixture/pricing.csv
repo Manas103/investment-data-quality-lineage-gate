@@ -1,0 +1,5 @@
+instrument_id,price_date,price,currency,source_file,source_row
+INS-0001,2026-08-27,100.00,USD,pricing.csv,2
+INS-0001,2026-08-28,100.00,USD,pricing.csv,3
+INS-0002,2026-08-28,-5.00,USD,pricing.csv,4
+INS-0003,2026-08-28,50.00,USD,pricing.csv,5

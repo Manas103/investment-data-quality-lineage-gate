@@ -1,0 +1,2 @@
+fund_id,fund_name,nav_date,reported_nav,source_file,source_row
+F01,Test Fund,2026-08-28,10000,funds.csv,2

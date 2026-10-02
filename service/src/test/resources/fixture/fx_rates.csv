@@ -1,0 +1,2 @@
+currency_code,rate_date,fx_rate_to_base,source_file,source_row
+EUR,2026-08-28,1.08,fx_rates.csv,2

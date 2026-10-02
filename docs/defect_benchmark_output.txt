@@ -1,0 +1,42 @@
+=== Investment Data Quality Gate ===
+instruments: 480
+pricing rows: 14328
+position rows: 72002
+fund-date rows: 150
+
+-- claim: 22 named rules --
+rules implemented: 22
+
+-- quarantine counts by rule --
+  coupon_rate_out_of_range_for_bond: 2
+  duplicate_identifier: 6
+  duplicate_position_row: 4
+  future_dated_price: 2
+  fx_rate_missing_for_nonbase_currency: 3
+  holdings_to_nav_tie_out: 4
+  invalid_currency_code: 2
+  matured_bond_still_priced: 60
+  missing_asset_class: 2
+  missing_benchmark: 2
+  missing_currency_code: 2
+  missing_maturity_date_for_bond: 2
+  missing_price: 2
+  missing_sector_for_equity: 2
+  negative_position_quantity: 2
+  negative_price: 2
+  orphan_position: 2
+  position_date_mismatch: 374
+  price_band_breach: 4
+  price_currency_mismatch: 122
+  stale_price: 476
+  zero_price: 2
+total quarantined records: 1079
+
+-- claim: every quarantine has a non-null lineage path and owner --
+quarantined records missing lineage: 0 / 1079
+
+-- claim: every quarantine reproducible from the audit log --
+replayed 1079 audit log entries, 1079 reproduced the original decision
+
+-- claim: 45 of 45 seeded defects caught --
+seeded defects caught: 45 / 45

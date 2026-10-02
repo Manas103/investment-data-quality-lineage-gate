@@ -1,0 +1,17 @@
+=== Investment Data Quality Gate ===
+instruments: 480
+pricing rows: 240000
+position rows: 1200000
+fund-date rows: 2500
+
+-- claim: 22 named rules --
+rules implemented: 22
+
+-- quarantine counts by rule --
+total quarantined records: 0
+
+-- claim: every quarantine has a non-null lineage path and owner --
+quarantined records missing lineage: 0 / 0
+
+-- claim: every quarantine reproducible from the audit log --
+replayed 0 audit log entries, 0 reproduced the original decision
