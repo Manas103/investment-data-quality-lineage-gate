@@ -1,0 +1,8 @@
+Vendor ingestion defect-corpus recall benchmark
+Files ingested: 290
+Records loaded back from Parquet: 36176
+Seeded defects: 500
+Caught: 500 of 500
+Total quarantine violations raised: 949 (a defect can legitimately trip more than one check)
+False-quarantined clean records in this corpus: 0
+

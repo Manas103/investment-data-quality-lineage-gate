@@ -1,0 +1,8 @@
+Vendor ingestion clean-corpus false-quarantine benchmark
+Machine: 8 physical / 16 logical cores, AMD Ryzen 7 7800X3D, Windows 11 Home, JDK 21 Temurin
+1,200 files across 40 schemas (30 files/schema), 1,000 rows/file = 1,200,000 records
+Generation (CSV write): 1.71s
+Ingestion (parse + Parquet write): 11.44s
+Read-back (Parquet -> IngestedRecord, all 1.2M rows): 1.90s
+14 health checks over all 1.2M records: 3.06s
+False quarantines: 0 of 1200000 records (claim: 0)

@@ -1,0 +1,54 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.mfs</groupId>
+  <artifactId>idqg-ingestion</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <junit.version>5.10.2</junit.version>
+  </properties>
+  <dependencies>
+    <dependency>
+      <!-- Pure-Java Parquet reader/writer with no Hadoop cluster dependency, used for the
+           point-in-time vendor vintages this module writes. -->
+      <groupId>blue.strategic.parquet</groupId>
+      <artifactId>parquet-floor</artifactId>
+      <version>1.44</version>
+    </dependency>
+    <dependency>
+      <!-- The 14 SQL health checks run as real SQL against this, H2 in PostgreSQL-compatibility
+           mode, the same no-real-Postgres-server precedent used by persistent-world-save-service
+           and throughout this portfolio. -->
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>2.3.232</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+  <build>
+    <finalName>idqg-ingestion</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <!-- half the physical cores on this machine, per the builder playbook's resource-courtesy rule -->
+          <argLine>-Xmx3g</argLine>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

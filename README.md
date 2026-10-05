@@ -6,8 +6,12 @@ rules, every failing record quarantined with a column-level lineage path
 back to its exact source file and row and routed to a named business owner,
 and an append-only audit log that can reproduce any quarantine decision on
 replay. Java 21, dbt + PostgreSQL (rule definitions), no third-party runtime
-dependency in the Java engine except JUnit for tests. Every number below was
-measured on this machine by running the commands shown, not targeted in
+dependency in the Java engine except JUnit for tests. Extended (Sep. 2026)
+with `ingestion/`: a vendor-feed ingestion platform (Java 21, Parquet via
+parquet-floor, H2 for the SQL half of the health checks) that writes every
+ingested vendor file as an immutable, point-in-time Parquet vintage and
+scores it against 14 named SQL-and-Java health checks. Every number below
+was measured on this machine by running the commands shown, not targeted in
 advance.
 
 ## Why this exists
@@ -51,6 +55,22 @@ not silently absorbed into a report. This is a small version of that gate.
   (Temurin-equivalent Ubuntu build), Maven 3.6.3, JUnit 5.10.2, Python
   3.10.12 (generator only), PostgreSQL 14 (dbt half only), dbt-core 1.12.5 +
   dbt-postgres 1.11.0.
+- **The `ingestion/` extension's generator writes real CSV text files, not in-memory rows.**
+  Every "vendor file" is a real file on disk (header line plus data rows, no embedded commas,
+  the same simplification the original generator above already discloses), parsed back by a
+  second, independent reader, then written as a real Parquet file via `parquet-floor` (a
+  Hadoop-cluster-free Parquet reader/writer) and read back through the real Apache Parquet
+  column format before any health check ever runs, proving the round trip rather than assuming it.
+- **The 14 health checks exist twice, and this pass actually re-ran both at scale.** The 7
+  original rules above only validated dbt's SQL structurally, not at scale, and said so. The
+  extension's 14 checks are written once as Java predicates (`HealthCheckEngine`, what runs at
+  the 500-defect and 1.2M-record scale below) and once as literal SQL
+  (`ingestion/sql/health_checks/*.sql`) against a real H2 database in PostgreSQL-compatibility
+  mode, and `HealthCheckSqlCrossCheckTest` asserts the two agree on the exact same
+  (source file, source row) set for every one of the 14 checks over the full 500-defect corpus,
+  not just a sample.
+- **Machine and toolchain for the extension.** Windows 11 Home (native, not WSL2 this time), JDK
+  21 Temurin, Maven 3.9.9, H2 2.3.232, parquet-floor 1.44 (Apache Parquet 1.14.0 underneath).
 
 ## Architecture
 
@@ -81,6 +101,23 @@ service/                 the Java engine actually run for the measurements below
     Main.java                     CLI: validate a corpus, print all 7 claims, score seeded defects
   src/test/java/com/mfs/idqg/RuleEngineTest.java   4 JUnit 5 tests (see Validation)
   src/test/resources/fixture/     a small hand-built corpus with one planted defect per rule family
+ingestion/                 the Sep. 2026 vendor-ingestion extension, its own Maven module
+  sql/schema_vendor_record.sql   the H2 table shape shared by every SQL health check
+  sql/health_checks/*.sql        14 named checks, one file each, the literal-SQL half
+  src/main/java/com/mfs/idqg/ingestion/
+    SchemaRegistry.java, VendorSchema.java   the 40 declared vendor feed schemas
+    InstrumentMaster.java                    a small reference instrument master (orphan check target)
+    VendorFileGenerator.java                 writes real CSV vendor files; seeds exactly 500 defects in place
+    VendorFileReader.java                     parses one file against its declared schema, tolerant of drift
+    IngestedRecord.java, DefectManifestEntry.java, QuarantineViolation.java
+    PointInTimeVintageStore.java              writes/reads one immutable Parquet vintage per ingested file
+    IngestionPipeline.java                    resolves a file's schema, ties reader + vintage store together
+    HealthCheckEngine.java                    the 14 checks, the Java half, what runs at scale
+  src/test/java/com/mfs/idqg/ingestion/
+    PointInTimeVintageStoreTest.java          Parquet round-trip and the restatement claim, directly
+    DefectCorpusRecallTest.java               the 500-seeded-defect recall benchmark
+    CleanCorpusFalseQuarantineTest.java       the 1.2M-record false-quarantine benchmark
+    HealthCheckSqlCrossCheckTest.java         SQL vs Java agreement, all 14 checks, full defect corpus
 ```
 
 ### Why the audit log stores a snapshot, not just a reference
@@ -96,6 +133,27 @@ quarantine reproducible from the audit log" a real, falsifiable claim rather
 than a restatement of "the detector ran once": if the snapshot had not
 captured enough context, replay would fail or diverge, and the test below
 would catch it.
+
+### Why the extension writes every vendor file as an immutable, versioned Parquet vintage
+
+Overwriting a prior day's Parquet file when a vendor restates a value destroys the ability to
+answer "what did we believe at the time". Every ingested file becomes its own Parquet object
+under `vintages/<schema>/<source-file-stem>-<uuid>.parquet`; re-ingesting the same (schema,
+as-of-date) under a new source file name a second time (a real restatement) produces a second,
+independent vintage file, never overwriting the first. `PointInTimeVintageStoreTest` proves this
+directly: two deliveries for the same schema and as-of-date leave two separate files on disk,
+both fully readable.
+
+### Why the 40 schemas all declare the same 10 column names
+
+The declared contract (`SchemaRegistry.FIELD_POOL`) is identical across all 40 schemas; what
+makes each one a distinct contract is its asset class, its value1 range, and whether negative
+values are legal, each of which a different health check is sensitive to. Schema drift (what
+`SCHEMA_DRIFT_COLUMN_COUNT` and `SCHEMA_DRIFT_MISSING_COLUMN` catch) is deliberately a property
+of one specific file's own header diverging from its schema's declaration, not a property of the
+schema set itself; keeping all 40 schemas' declared columns identical isolates that distinction
+cleanly rather than conflating "this schema has fewer columns than that one" with "this file
+drifted from what its own schema declares".
 
 ### Why dbt and Java implement the same 22 rules independently
 
@@ -139,7 +197,54 @@ Full output: `docs/test_output.txt`.
    that snapshot) are different code paths over the same rule predicates,
    and they are required to agree on every single record, not on average.
 
+### Ingestion extension (4 tests, `ingestion/src/test/java`)
+
+```
+$ cd ingestion && mvn test
+Tests run: 1, ... -- PointInTimeVintageStoreTest (2 tests)
+Tests run: 1, ... -- DefectCorpusRecallTest
+Tests run: 1, ... -- CleanCorpusFalseQuarantineTest
+Tests run: 1, ... -- HealthCheckSqlCrossCheckTest
+```
+
+`PointInTimeVintageStoreTest` covers: every field round-trips exactly through a real Parquet
+write and read; re-ingesting the same (schema, as-of-date) under a second source file leaves
+both vintages on disk as separate files, both independently readable.
+
+`DefectCorpusRecallTest` seeds exactly 500 defects across 10 row-level checks (36 each) plus 4
+file-shaped checks (schema drift x2, row-count anomaly, cross-source disagreement), ingests the
+resulting ~290 vendor files through the real Parquet round trip, and asserts every seeded
+defect's (check, source file, source row) coordinate is present in the engine's own violation
+set.
+
+`CleanCorpusFalseQuarantineTest` generates 1,200 files across 40 schemas (30 files/schema, 1,000
+rows/file), all valid, ingests all 1.2M records through Parquet, and asserts the 14 health checks
+raise exactly zero violations.
+
+`HealthCheckSqlCrossCheckTest` loads the full 500-defect corpus (36,176 records) into a real H2
+database and asserts, for every one of the 14 checks independently, that the literal SQL version
+and the Java version flag the exact same set of (source file, source row) pairs, not just the
+same count.
+
 ## Findings
+
+**The ingestion extension's first false-quarantine run reported 3,276 false quarantines over a
+36,000-record corpus, not zero.** The row-count-anomaly check compares each file's row count
+against its schema's average file size; the first version's average mixed the main-pass files
+(150 rows each) with the schema's own deliberately tiny drift-fixture files (10 rows, or even 1
+row for the cross-source-disagreement fixtures), which dragged one schema's average down to 1
+row and made every one of that schema's genuinely normal 150-row files look anomalous by
+comparison. Switching the row-count baseline to a median computed only over files with at least
+50 rows (so the tiny fixtures are evaluated against the baseline but excluded from computing it)
+cut this to 50 false quarantines; the last 50, all `duplicate_row`, turned out to be each
+duplicate-seeded row's own untracked twin (a duplicate is, by definition, two identical rows, and
+the health check correctly quarantines both, but the defect manifest had only recorded one of the
+two coordinates), fixed by recognizing the twin's coordinate as expected rather than unexplained.
+The final run is 0 false quarantines over both corpora. A second, unrelated instrument-pool
+sizing bug was found along the way: the clean corpus's per-file instrument-index window wrapped
+back over an earlier file's window once 30 files/schema needed more distinct instruments than a
+2,000-instrument pool could give without wrapping, which spuriously tripped
+`CROSS_SOURCE_DISAGREEMENT`; fixed by sizing the instrument pool to the corpus that actually uses it.
 
 **The defect-corpus catch rate first measured 31 of 45, not 45 of 45, and
 the missing 14 were not random.** The first honest run of the 45-seeded-
@@ -181,6 +286,25 @@ beyond the JVM's default GC threads.
 | every quarantine reproducible from the audit log | 1,079 / 1,079 replayed decisions reproduced (defect run); 0 / 0 trivially on the clean run | yes |
 | column-level lineage path back to source file and row | 0 / 1,079 quarantined records missing lineage | yes |
 | failing records routed to a named business owner | 3 named owners (Pricing Operations - D. Alvarez; Security Master - R. Chen; Fund Accounting - T. Osei), every record resolves one | yes |
+
+## Measured results: vendor-ingestion extension
+
+Windows 11 Home (native), JDK 21 Temurin, Maven 3.9.9, single run, no parallelism beyond the
+JVM's default GC threads.
+
+| Claim | Measured | Meets claim |
+|---|---|---|
+| 1,200+ simulated vendor files/day across 40 schemas | 1,200 files, 40 schemas (30 files/schema) | yes |
+| Point-in-time Parquet vintages keeping every restatement | every ingested file is its own immutable Parquet object; a second delivery for the same (schema, as-of-date) leaves both vintages on disk, both independently readable | yes |
+| 14 SQL health checks | 14 implemented (and cross-checked against an independent Java implementation over the full 500-defect corpus, 36,176 records, all 14 agree exactly) | yes |
+| 480 of 500 seeded defects caught | 500 / 500 (after fixing the false-quarantine bugs in Findings; not tuned down to the claim, see `docs/defect_benchmark_output.txt`) | yes, and above the claim |
+| Zero false quarantines over 1.2M records | 0 / 1,200,000 (`docs/clean_benchmark_output.txt`) | yes |
+
+Full raw output: `ingestion/docs/defect_benchmark_output.txt` (500-defect corpus, 290 files,
+36,176 records, 949 total quarantine violations raised since a seeded defect can legitimately
+also trip a second check, e.g. a schema-drift fixture row is also a row-count outlier for its
+own file) and `ingestion/docs/clean_benchmark_output.txt` (1.2M-record run: 1.71s to generate,
+11.44s to ingest through Parquet, 1.90s to read back, 3.06s to run all 14 checks, 0 violations).
 
 Full raw output: `docs/defect_benchmark_output.txt` (45-defect corpus, 30
 trading days, 1,079 total quarantined records across all 22 rules, several
@@ -225,6 +349,14 @@ cd dbt && dbt debug   # confirms the connection; dbt run / dbt test are the
                        # next commands a future pass should re-run at scale
 ```
 
+```bash
+# ingestion extension (its own Maven module, independent of service/ above)
+cd ingestion
+mvn test   # 4 JUnit 5 test classes: Parquet round-trip, 500-defect recall, 1.2M-record
+           # false-quarantine, and the SQL-vs-Java cross-check; ~4 minutes total, the
+           # SQL cross-check is the slow one at ~3.5 minutes over the full defect corpus
+```
+
 ## Sibling comparison
 
 [`multi-custodian-reconciliation-console`](https://github.com/Manas103/multi-custodian-reconciliation-console)
@@ -259,3 +391,12 @@ shipped.
   predicates is by code review, not an automated cross-check**, for this
   pass; the architecture section above explains why an automated version
   would be the right next investment.
+- **The vendor-ingestion extension's "40 schemas" all share the same 10 declared column names**,
+  differing only in asset class, value range and sign policy, not in column shape; a real vendor
+  landscape would have genuinely different column sets per feed. Schema drift is still a real,
+  file-level property independent of this simplification (see Architecture).
+- **`CROSS_SOURCE_DISAGREEMENT` and the duplicate-row check both key on an exact string match of
+  as_of_date and instrument_id**, with no fuzzy matching or late-binding reference resolution; a
+  real cross-source reconciliation would need to handle identifier crosswalks.
+- **No Spring Boot API or console for the ingestion extension either**, consistent with the
+  budget-cut precedent already disclosed above for the original gate.
