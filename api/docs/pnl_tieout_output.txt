@@ -1,0 +1,8 @@
+P&L tie-out to holdings benchmark
+Machine: Windows 11 Home, JDK 21 Temurin, Maven 3.9.9
+Corpus: 480 instruments x 5 funds x 500 trading days = 1,200,000 position rows
+Corpus generation: 6.34s, CSV load: 0.69s, tie-out computation: 1.39s
+Fund-date P&L figures compared: 2495 (5 funds x 499 day-over-day transitions)
+Mismatches (> $0.01 absolute difference between the two independent aggregations): 0
+Max absolute difference observed: $0.000001
+Claim: P&L tied out to holdings over 1.2M records

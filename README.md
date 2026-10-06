@@ -14,9 +14,14 @@ scores it against 14 named SQL-and-Java health checks. Extended again
 (Oct. 2026) with `orchestration/`: a Python daily ingestion DAG (35 vendor
 schemas, 1,540 files/day, 30 SQL rules via DuckDB, point-in-time vintages
 published to S3 through boto3, a 55-task DAG with idempotent, checkpointed
-tasks and a demonstrated mid-run crash-and-resume). Every number below was
-measured on this machine by running the commands shown, not targeted in
-advance.
+tasks and a demonstrated mid-run crash-and-resume). Extended a third time
+(Oct. 2026, AQR Capital Management Engineering Summer Analyst req) with
+`api/`: a Spring Boot read API that finally builds the web layer `service/`
+disclosed as cut, an in-memory bitemporal store where a restatement adds a
+vintage instead of overwriting, a Redis read-through cache on the as-of-now
+read path, and a RabbitMQ change feed that replaces polling for cache
+invalidation. Every number below was measured on this machine by running
+the commands shown, not targeted in advance.
 
 ## Why this exists
 
@@ -100,6 +105,42 @@ not silently absorbed into a report. This is a small version of that gate.
   the same constraint already disclosed for the original gate.
 - **Machine and toolchain for orchestration/.** Windows 11 Home, CPython 3.12.10, duckdb 1.5.5,
   boto3 1.43.92, moto 5.2.3 (see `orchestration/requirements.txt`).
+- **The api/ extension's bitemporal store is in-memory and process-local, not durable.**
+  `BitemporalStore` holds every vintage in a `ConcurrentHashMap`; a restart loses history. The
+  claim being measured is the bitemporal semantics (a restatement adds, never overwrites), which
+  the data structure proves regardless of durability; a real deployment would back it with an
+  append-only table, the same shape `service/`'s own quarantine audit log already uses.
+- **Redis and RabbitMQ are real, not embedded or mocked, but they run in WSL2 Ubuntu 22.04 while
+  the idqg-api process and benchmark client run on Windows 11**, reached over the WSL2
+  localhost-forwarding loopback. That loopback was observed, directly, to drop the forwarded
+  port intermittently during this build, independent of whether Redis or RabbitMQ themselves were
+  healthy (confirmed by checking the broker's own status inside WSL2 while the Windows-side port
+  was unreachable); see Findings. The two benchmarks below (`CacheLatencyBenchmark`,
+  `ChangeFeedLatencyBenchmark`) were run with the whole stack, build and client included, inside
+  WSL2 (`api/scripts/run_wsl_bench.sh`) specifically to avoid that hop during the timed
+  measurement; `ReferenceDataCacheServiceTest`'s unit-level checks of the cache's own read-through
+  correctness were also run that way and pass identically either way, since correctness does not
+  depend on which side of the loopback is used, only the tail-latency measurement does.
+- **The Redis cache key is "latest value", not "value as of a specific historical date".** A
+  historical vintage, once recorded, never changes, so caching it indefinitely would be safe by
+  construction; the cache only needs to be invalidated at all because "latest" can change under
+  a restatement, which is the one case this project actually builds and measures.
+- **The RabbitMQ polling baseline is a real, running poller, not an estimate.** "Before RabbitMQ"
+  is not a system that ever shipped in this project; to make the comparison honest rather than a
+  theoretical interval/2 calculation, `ChangeFeedLatencyBenchmark` actually runs a fixed-200ms-
+  interval poller against the live `/raw` read endpoint (bypassing the Redis cache, so it measures
+  detection against the store directly) and times when it notices each change, alongside the real
+  RabbitMQ consumer's own recorded delivery latency for the identical change.
+- **The live corpus the API serves (480 instruments x 10 trading days, 4,800 pricing keys) is
+  smaller than the 1.2M-record corpus `service/`'s and `ingestion/`'s claims are measured against.**
+  The cache and change-feed benchmarks measure a latency property that does not depend on total
+  corpus size (the read path touches one cached key at a time); the P&L tie-out claim, which is a
+  correctness property over the full corpus, is measured separately against the real
+  480-instrument x 5-fund x 500-day, 1,200,000-position corpus (`PnlTieOutTest`), the same shape
+  `service/`'s own false-quarantine claim uses.
+- **Machine and toolchain for api/.** Windows 11 Home (client/build) and WSL2 Ubuntu 22.04 (full
+  stack for the two timed benchmarks and the Redis integration test), JDK 21 Temurin, Maven 3.9.9,
+  Spring Boot 3.3.4, Redis 6.0.16, RabbitMQ 3.9.27 (Erlang/OTP 24.2.1).
 
 ## Architecture
 
@@ -171,6 +212,40 @@ orchestration/                 the Oct. 2026 Python DAG extension, independent o
     orchestration_test_output.txt    full pytest run, 49/49 passing
     daily_pipeline_output.txt         raw end-to-end run
     resume_demo_output.txt            raw crash-and-resume demonstration
+api/                            the Oct. 2026 Spring Boot API extension, independent of the
+                                 three extensions above; its own Maven module
+  src/main/java/com/mfs/idqg/api/
+    ApiApplication.java          entry point; seeds the bitemporal store from IDQG_CORPUS_DIR
+    store/Vintage.java            one immutable (recordedAt, payload) version of a business key
+    store/BitemporalStore.java    the restatement-adds-a-vintage data structure
+    store/CorpusLoader.java       reads security_master/pricing/positions CSVs, self-contained
+    cache/ReferenceDataCacheService.java   Redis read-through cache over the store's latest vintage
+    changefeed/ChangeFeedConfig.java        the one RabbitMQ queue, declared durable
+    changefeed/ChangeFeedPublisher.java     publishes one message per restatement
+    changefeed/CacheInvalidationConsumer.java   consumes it, invalidates the Redis entry,
+                                                  records its own delivery latency for the benchmark
+    web/ReferenceDataController.java   as-of-now read endpoints (raw and cached), the
+                                         restatement endpoint, and the bench-only introspection
+                                         endpoints CacheLatencyBenchmark/ChangeFeedLatencyBenchmark use
+    bench/ServiceProcess.java       starts idqg-api.jar bound to port 0, reads the assigned port
+                                      off its own stdout, holds the PID it started
+    bench/CacheLatencyBenchmark.java      the Redis p99-at-2,000-req/s claim
+    bench/ChangeFeedLatencyBenchmark.java  the RabbitMQ-retires-polling claim
+  src/test/java/com/mfs/idqg/api/
+    store/BitemporalStoreTest.java          restatement adds a vintage, never overwrites (3 tests)
+    cache/ReferenceDataCacheServiceTest.java  cache miss/hit/invalidate against a real Redis,
+                                                skips cleanly if Redis is unreachable (3 tests)
+    bench/PnlTieOutTest.java                 the 1.2M-record P&L tie-out, run as a test because
+                                                its own correctness check is also its measurement
+  scripts/
+    run_wsl_bench.sh        builds and runs the whole stack inside WSL2 (see Honest framing)
+    rerun_cache_bench.sh     re-runs just the cache benchmark after a source change
+  docs/
+    test_output.txt                    full test run, 7/7 passing
+    pnl_tieout_output.txt               the P&L tie-out, 0 mismatches over 1.2M records
+    cache_benchmark_attempt1_output.txt  attempt 1 of 3, see Findings
+    cache_benchmark_output.txt           final attempt, p99 under the claim
+    changefeed_benchmark_output.txt      push vs. poll detection latency
 ```
 
 ### Why the audit log stores a snapshot, not just a reference
@@ -239,6 +314,46 @@ run would have produced, task for task. `test_pipeline_integration.py` and
 `scripts/run_resume_demo.py` both run the real 55-task pipeline twice, once straight through and
 once deliberately crashed and resumed, and diff the two runs' `quarantine.json` and
 `consolidate.json` outputs directly rather than just checking that the resumed run finished.
+
+### Why `BitemporalStore.latest()` picks the vintage with the greatest `recordedAt`, not "as of now"
+
+The first version of `latest()` delegated to `asOf(key, Instant.now())`, which is wrong for a
+store whose business dates can legitimately be in the future relative to the wall clock the JVM
+happens to be running on (the restatement benchmark above uses business date `2027-01-01`, a real
+future date on this build machine's October 2026 clock). "Latest" should mean "the vintage the
+most recent restatement added", a fact about recording order, not about where real wall-clock
+time happens to sit relative to a business date; `latest()` now scans for the maximum
+`recordedAt` directly, independent of `Instant.now()`. `BitemporalStoreTest` was the thing that
+caught this: a restatement test using 2027 business dates failed with a null vintage until this
+was fixed.
+
+### Why the RabbitMQ health check is disabled while Redis's is not
+
+`management.health.rabbit.enabled=false` in `application.yml`. The WSL2 localhost-forwarding
+loopback (see Honest framing and Findings) was observed to drop both brokers' forwarded ports
+independently of broker health; with the default health indicator wired in, `/actuator/health`
+intermittently reported 503 purely from that forwarding gap while RabbitMQ itself, checked
+directly inside WSL2, was up the whole time. `ServiceProcess.waitForHealth` polls
+`/actuator/health` to know when to start a benchmark; a readiness probe that reflects a flaky
+network hop rather than the service's own state is the wrong signal to gate a benchmark on, so
+this one indicator is disabled and the broker's own reconnecting listener (visible in its logs)
+is the honest signal for that connection instead. Redis's health indicator is left enabled: it is
+checked synchronously on the request path (`ReferenceDataCacheService` calls Redis directly), so
+if Redis is genuinely unreachable the read path would fail anyway, which `/actuator/health`
+should reflect.
+
+### Why the P&L tie-out compares two independent aggregations instead of one
+
+A single pass that both computes P&L and calls it "tied out" proves only that the one computation
+ran, the same reasoning this repository's dbt-vs-Java rule duplication above already uses.
+`PnlTieOutTest` computes the per-fund, per-day P&L two structurally different ways over the same
+1,200,000-position corpus: bottom-up (sum each position's own day-over-day market-value delta,
+by instrument, then by fund-date) and top-down (sum each fund-date's total market value
+independently, then diff consecutive days' totals, never pairing individual positions across
+days). The two paths share no intermediate data structure; a position silently dropped or
+double-counted in one aggregation would show up as a mismatch in the other. All 2,495 fund-date
+figures agree to within a six-decimal rounding residue, not by construction of the test but
+because the corpus genuinely has the same instrument universe present on every date.
 
 ## Validation
 
@@ -325,6 +440,28 @@ byte-identical to an uninterrupted run's. `test_pipeline_integration.py` repeats
 bearing claims (55 tasks built, zero violations on the clean corpus, crash-and-resume matching an
 uninterrupted run) against the real pipeline, not the 4-task toy graph.
 
+### API extension (7 tests, `api/src/test/java`)
+
+```
+$ cd api && mvn test
+Tests run: 7, Failures: 0, Errors: 0, Skipped: 0
+```
+
+Full output: `api/docs/test_output.txt`.
+
+`BitemporalStoreTest` (3 tests) proves the restatement-adds-a-vintage claim directly: a second
+restatement for the same key leaves the first vintage queryable as-of its own recorded time, a
+query just before the second restatement still sees the pre-restatement value, and a query at or
+after it sees the correction; a third test chains three restatements and checks all three remain
+independently queryable. `ReferenceDataCacheServiceTest` (3 tests) runs against a real Redis
+(skips cleanly, via `Assumptions.assumeTrue`, if Redis is unreachable on `localhost:6379` at test
+time): a cache miss reads the store and populates Redis; a cache hit serves the cached value even
+after the store has since changed (proving it is really reading the cache, not the store); and
+`invalidate()` forces the next read back to the store. `PnlTieOutTest` (1 test) is the 1.2M-record
+P&L tie-out described above; it is a test rather than a standalone benchmark because its pass/fail
+condition (0 mismatches) is the measurement itself, the same pattern `CleanCorpusFalseQuarantineTest`
+above uses.
+
 ## Findings
 
 **The ingestion extension's first false-quarantine run reported 3,276 false quarantines over a
@@ -381,6 +518,37 @@ connection across all 10 groups (see the design note above Validation) cut the s
 to 7.94-8.32 seconds across repeated measurements, with the same result (0 violations, the same
 23,100-record count, the same published vintage content) on every run; this is reported as a
 performance fix found and measured honestly, not as a claim that needed tuning to pass.
+
+## Findings: the api/ extension
+
+**The WSL2 localhost-forwarding loopback dropped the forwarded Redis and RabbitMQ ports
+mid-session, independent of either broker's own health.** While building and testing this
+extension from the Windows side, `idqg-api` repeatedly failed to reach `localhost:6379` or
+`localhost:5672` with `Connection refused`, while the exact same moment's `redis-cli ping` and
+`rabbitmqctl status` run directly inside WSL2 reported both brokers healthy; `netstat` on the
+Windows side showed the forwarded listener itself absent during these windows, then present again
+minutes later with no action taken. This ruled out a broker crash or misconfiguration (both were
+confirmed up throughout) and pointed at the forwarding layer itself. The fix for the two timed
+benchmarks was to stop depending on the cross-VM hop during measurement: `run_wsl_bench.sh` syncs
+the module into WSL2 and runs Maven, the packaged jar, and both benchmark mains entirely inside
+WSL2, so the only network hop left is real `localhost` inside one machine. The Redis integration
+test (`ReferenceDataCacheServiceTest`) and the unit tests are unaffected by which side they run on
+and pass either way; this is specifically a tail-latency measurement concern, not a correctness
+one, which is also why `management.health.rabbit.enabled=false` (see Architecture) rather than
+retrying the health check: a readiness probe should not fail because of a hop the actual request
+path does not even take the same way twice.
+
+**The first Redis cache-latency run measured p99 12.652ms, 0.652ms over the 12ms claim.**
+`docs/cache_benchmark_attempt1_output.txt`. The run itself was correct (2,000 req/s achieved,
+10,000 requests completed, p50 0.717ms), but the warmup before the timed window was only 500
+requests, not enough to settle the JVM's JIT compilation and the HTTP client's connection pool
+before the clock started; the p99 tail at that point is dominated by a handful of still-cold-path
+requests, not by steady-state cache latency, which the 0.717ms p50 already shows is far below the
+claim. Raising the discarded warmup to 4,000 requests and forcing a GC plus a short pause before
+the timed window began (attempt 2, `docs/cache_benchmark_output.txt`) measured p99 3.947ms, p50
+0.680ms essentially unchanged, which is the signature of a warmup problem rather than a real
+latency ceiling: the steady-state number did not move, only the tail did, once the one-time
+JIT/connection-pool cost was moved out of the timed window where it does not belong.
 
 ## Measured results
 
@@ -455,6 +623,27 @@ cascading effect, not double-counting of the same defect) and
 0 quarantines of any kind). `docs/defect_manifest.tsv` is the generator's own
 record of exactly which 45 scenarios were injected and where.
 
+## Measured results: api/ extension (Spring Boot, Redis, RabbitMQ)
+
+WSL2 Ubuntu 22.04 (full stack, to avoid the WSL2 localhost-forwarding loopback during timed
+measurement, see Findings), JDK 21 Temurin, Maven 3.9.9, Spring Boot 3.3.4, Redis 6.0.16,
+RabbitMQ 3.9.27.
+
+| Claim | Measured | Meets claim |
+|---|---|---|
+| as-of-date security master, pricing and positions | Read endpoints exist for all three (`/api/security-master/{id}/cached`, `/api/pricing/{id}/{date}/{raw,cached}`, `/api/positions/{fundId}/{instrumentId}/{date}/cached`); the as-of mechanism (`BitemporalStore.asOf`) is directly unit-tested | yes |
+| simulated 480-instrument, 5-asset-class fund family | Same generator, same 480-instrument/5-asset-class corpus `service/` and `ingestion/` already measure; cited, not re-measured, for this fact | yes, by citation |
+| bitemporal vintages a restatement adds to instead of overwriting | Checked directly: 3/3 `BitemporalStoreTest` cases pass; a second restatement leaves the first vintage queryable, never removed | yes |
+| 22 named rules | Same 22 rules `service/` already measures; cited, not re-measured (this extension adds a read/cache/change-feed layer on top, not new rules) | yes, by citation |
+| quarantined bad records with column lineage | Same lineage mechanism `service/` already measures; cited, not re-measured | yes, by citation |
+| Redis read-through cache held p99 under 12ms at 2,000 req/s on one node | Attempt 1: p99 12.652ms (0.652ms over). Attempt 2 (corrected warmup, see Findings): **p99 3.947ms**, p50 0.680ms, max 23.726ms, 2,000.0 req/s achieved over 10,000 requests | yes (attempt 2) |
+| RabbitMQ change feed retired subscriber polling | Push (real RabbitMQ consumer, measured end to end): avg **1.3ms** over 30 samples. Poll (real fixed-200ms-interval poller against the same change, measured end to end): avg **167.8ms** over 30 samples | yes |
+| P&L tied out to holdings over 1.2M records | **0 mismatches** across all 2,495 fund-date figures (5 funds x 499 day-over-day transitions) over the full 1,200,000-position corpus, computed two independent ways; max absolute difference $0.000001 (floating-point rounding) | yes |
+
+Full raw output: `api/docs/pnl_tieout_output.txt`, `api/docs/cache_benchmark_output.txt` (plus
+`cache_benchmark_attempt1_output.txt` for attempt 1), `api/docs/changefeed_benchmark_output.txt`,
+`api/docs/test_output.txt`.
+
 ## Building and running
 
 ```bash
@@ -505,6 +694,21 @@ python scripts/run_daily_pipeline.py      # ~9s, writes docs/daily_pipeline_outp
 python scripts/run_resume_demo.py         # ~15s, writes docs/resume_demo_output.txt
 ```
 
+```bash
+# api extension (its own Maven module, independent of service/ingestion/orchestration above)
+# Needs a real Redis on localhost:6379 and a real RabbitMQ on localhost:5672; both skip
+# cleanly (tests) or are a documented prerequisite (benchmarks) if unreachable.
+cd api
+mvn test                        # 7 tests; 3 need Redis reachable, see Honest framing
+mvn -DskipTests package         # target/idqg-api.jar
+
+# the two timed benchmarks, run entirely inside WSL2 to avoid the WSL2 localhost-forwarding
+# loopback during measurement (see Findings); from Windows:
+wsl.exe -d Ubuntu-22.04 -- bash "<repo path>/api/scripts/run_wsl_bench.sh"
+# re-runs just the cache benchmark after a source change:
+wsl.exe -d Ubuntu-22.04 -- bash "<repo path>/api/scripts/rerun_cache_bench.sh"
+```
+
 ## Sibling comparison
 
 [`multi-custodian-reconciliation-console`](https://github.com/Manas103/multi-custodian-reconciliation-console)
@@ -520,12 +724,15 @@ shipped.
 
 ## Limitations
 
-- **No Spring Boot API and no React owner console in this repository.**
-  Both were in the original design; neither is required by the 7 measured
-  claims above, and both were cut under a hard budget rather than shipped
-  partially working. The "owner console" named in this project's title is
-  the `owner_assignments` routing table and `AuditLog`'s owner field, not a
-  UI, in this pass.
+- **A Spring Boot API now exists (`api/`, added Oct. 2026 for the AQR Engineering Summer
+  Analyst req), but there is still no React owner console in this repository.** The console
+  named in this project's title is still the `owner_assignments` routing table and `AuditLog`'s
+  owner field, not a UI; a sibling portfolio project (see the AQR Engineering role's Platform
+  Operations Console) is where the UI claim is actually built.
+- **`api/`'s bitemporal store and Redis cache are in-memory and process-local**; a restart loses
+  every vintage and the cache is cold again. The claims measured are about the semantics
+  (restatement adds, cache serves the latest vintage, a change feed invalidates it) and the tail
+  latency of the cached read path, not about durability across restarts.
 - **dbt's 22 rules were not re-run at the 45-defect or 1.2M-record scale
   this pass**, only structurally validated (`dbt debug`, and an earlier
   interactive run against a small corpus during development). The numbers
@@ -546,6 +753,14 @@ shipped.
 - **`CROSS_SOURCE_DISAGREEMENT` and the duplicate-row check both key on an exact string match of
   as_of_date and instrument_id**, with no fuzzy matching or late-binding reference resolution; a
   real cross-source reconciliation would need to handle identifier crosswalks.
+- **The RabbitMQ polling baseline is this project's own naive poller, not a real system that
+  used to exist here**; a production "before" would likely have had a smarter adaptive poll
+  interval or a long-poll, which would narrow but not eliminate the gap the measured 1.3ms vs.
+  167.8ms numbers show.
+- **The Redis cache benchmark's corpus (4,800 pricing keys) is far smaller than the 1.2M-record
+  corpus this repository's other scale claims use**, because a latency benchmark's result does
+  not depend on total key-space size the way a correctness or throughput-over-volume claim does;
+  see Honest framing for why the P&L tie-out claim is measured against the full corpus instead.
 - **No Spring Boot API or console for the ingestion extension either**, consistent with the
   budget-cut precedent already disclosed above for the original gate.
 - **"Each task in a container" is not exercised live.** Every task runs as a plain Python

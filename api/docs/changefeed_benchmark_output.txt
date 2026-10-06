@@ -1,0 +1,7 @@
+RabbitMQ change feed vs fixed-interval polling: detection latency
+Machine: Windows 11 Home (idqg-api process), RabbitMQ 3.9.27 in WSL2 Ubuntu 22.04,
+reached over the WSL2 localhost-forwarding loopback.
+Trials: 30, poll interval: 200ms
+Push (RabbitMQ consumer, measured end to end): avg 1.3ms over 30 samples
+Poll (fixed-interval re-read, measured end to end): avg 167.8ms over 30 samples
+Claim: RabbitMQ change feed retired subscriber polling

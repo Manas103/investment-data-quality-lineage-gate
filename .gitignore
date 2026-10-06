@@ -1,6 +1,7 @@
 # build outputs
 service/target/
 ingestion/target/
+api/target/
 *.class
 *.jar
 

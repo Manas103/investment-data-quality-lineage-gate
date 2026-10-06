@@ -1,0 +1,22 @@
+idqg-api test suite, run via `mvn test` (Maven 3.9.9, JDK 21 Temurin, WSL2 Ubuntu 22.04,
+Redis 6.0.16 and RabbitMQ 3.9.27 both reachable at localhost for this run).
+
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 9.490 s -- in com.mfs.idqg.api.bench.PnlTieOutTest
+Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.061 s -- in com.mfs.idqg.api.cache.ReferenceDataCacheServiceTest
+Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in com.mfs.idqg.api.store.BitemporalStoreTest
+
+Tests run: 7, Failures: 0, Errors: 0, Skipped: 0
+
+PnlTieOutTest stdout (the 1.2M-record P&L tie-out, see pnl_tieout_output.txt for the full report):
+wrote 480 security_master, 240000 pricing, 1200000 positions, 2500 funds rows to /tmp/idqg-pnl-corpus18158525219668736465
+P&L tie-out to holdings benchmark
+Machine: Windows 11 Home, JDK 21 Temurin, Maven 3.9.9
+Corpus: 480 instruments x 5 funds x 500 trading days = 1,200,000 position rows
+Corpus generation: 6.66s, CSV load: 1.22s, tie-out computation: 1.58s
+Fund-date P&L figures compared: 2495 (5 funds x 499 day-over-day transitions)
+Mismatches (> $0.01 absolute difference between the two independent aggregations): 0
+Max absolute difference observed: $0.000001
+Claim: P&L tied out to holdings over 1.2M records
+
+ReferenceDataCacheServiceTest ran against a real Redis (not skipped): cacheMissReadsStoreAndPopulatesRedis,
+cacheHitServesWithoutChangingTheStore, invalidateForcesTheNextReadBackToTheStore, all passing.

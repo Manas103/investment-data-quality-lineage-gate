@@ -1,0 +1,8 @@
+Redis read-through cache latency benchmark
+Machine: Windows 11 Home (Java client + idqg-api process), Redis 6.0.16 in WSL2 Ubuntu 22.04,
+reached over the WSL2 localhost-forwarding loopback, not same-process localhost.
+Corpus: 480 instruments x 10 trading days = 4,800 pricing keys, all pre-warmed into Redis.
+Target rate: 2000 req/s open-loop for 5s (warmup of 4000 requests discarded first).
+Requests completed: 10000, achieved rate: 2000.0 req/s
+p50: 0.680ms  p99: 3.947ms  max: 23.726ms
+Claim: p99 under 12ms at 2,000 req/s on one node

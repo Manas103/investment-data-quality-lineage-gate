@@ -1,0 +1,26 @@
+server:
+  port: ${IDQG_API_PORT:0}
+
+spring:
+  data:
+    redis:
+      host: ${IDQG_REDIS_HOST:localhost}
+      port: ${IDQG_REDIS_PORT:6379}
+  rabbitmq:
+    host: ${IDQG_RABBITMQ_HOST:localhost}
+    port: ${IDQG_RABBITMQ_PORT:5672}
+    username: ${IDQG_RABBITMQ_USER:guest}
+    password: ${IDQG_RABBITMQ_PASSWORD:guest}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  health:
+    # The WSL2 localhost-forwarding loopback this RabbitMQ runs behind has observed, transient
+    # drops independent of the broker itself (see README Findings); readiness should reflect
+    # whether this process is serving, not a flaky forwarding hop, so the broker's own
+    # reconnecting listener (visible in its logs) is the honest signal for that, not this probe.
+    rabbit:
+      enabled: false
