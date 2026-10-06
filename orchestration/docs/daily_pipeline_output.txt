@@ -1,0 +1,9 @@
+generated 1540 vendor files across 35 schemas in 0.68s
+built 55 DAG tasks
+executed 55 tasks, skipped 0, in 8.32s
+consolidated record count: 23100
+quarantine violations: 0
+violations missing lineage: 0 of 0
+vintage published to s3://aqr-orchestration-vintages/vintages/daily_consolidated/2026-10-05/4042ad1e-5eb6-48af-9afa-3af740102d0d.json
+reconcile_checksum record count matches consolidate: True
+vintage read back from S3 matches what was written: True

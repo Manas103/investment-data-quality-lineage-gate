@@ -1,0 +1,9 @@
+clean run: executed 55 tasks, skipped 0
+simulated crash: simulated crash after task validate_group_4
+tasks completed before the crash: 42 of 55
+'validate_group_4' in checkpoints at crash time: True
+'quarantine' in checkpoints at crash time (should be False, it runs later): False
+resume run: executed 13 tasks, skipped 42 (the ones from before the crash)
+clean run quarantine count: 0, resumed run quarantine count: 0
+clean run record count: 23100, resumed run record count: 23100
+resumed run matches the uninterrupted run exactly: True
